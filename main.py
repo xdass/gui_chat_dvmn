@@ -31,9 +31,10 @@ async def read_msgs(host, port, queue, history_q):
 
 
 async def save_messages(filepath, queue):
-    # message = await queue.get()
-    async with aiofiles.open(filepath, "wb") as fh:
-        await pickle.dump(queue, fh)
+    async with aiofiles.open(filepath, "w") as fh:
+        while True:
+            message = await queue.get()
+            await fh.write(message + "\n")
 
 
 async def main():
