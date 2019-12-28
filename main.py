@@ -1,7 +1,5 @@
 import asyncio
 import socket
-import time
-import pickle
 import gui
 
 import aiofiles
@@ -15,12 +13,6 @@ async def connect(addr, port):
     return await asyncio.open_connection(sock=sock)
 
 
-async def generate_msgs(message_queue):
-    while True:
-        message_queue.put_nowait(f"Ping {time.time()}")
-        await asyncio.sleep(1)
-
-
 async def read_msgs(host, port, queue, history_q):
     reader, writer = await connect(host, port)
     while True:
@@ -31,10 +23,19 @@ async def read_msgs(host, port, queue, history_q):
 
 
 async def save_messages(filepath, queue):
-    async with aiofiles.open(filepath, "w") as fh:
+    async with aiofiles.open(filepath, "a", encoding="utf8") as fh:
         while True:
             message = await queue.get()
             await fh.write(message + "\n")
+
+
+def load_messages_history(filepath, queue):
+    try:
+        with open(filepath, "r", encoding="utf8") as fh:
+            for line in fh.readlines():
+                queue.put_nowait(line.replace("\n", ""))
+    except FileNotFoundError:
+        print(f"Не найден файл {filepath}")
 
 
 async def main():
@@ -52,6 +53,7 @@ async def main():
     sending_queue = asyncio.Queue()
     status_updates_queue = asyncio.Queue()
     history_queue = asyncio.Queue()
+    load_messages_history("chat_history.txt", messages_queue)
 
     await asyncio.gather(
         read_msgs(options.host, options.port, messages_queue, history_queue),
