@@ -3,8 +3,11 @@ import time
 import json
 import socket
 import logging
-import gui
+import sys
 from tkinter import messagebox
+import gui
+from util import create_handy_nursery, set_keepalive_linux
+
 
 import aiofiles
 import configargparse
@@ -29,6 +32,7 @@ async def connect(addr, port):
 
 
 async def read_msgs(host, port, queue, history_q, status_q, watchdog_q):
+    status_q.put_nowait(gui.ReadConnectionStateChanged.INITIATED)
     reader, writer = await connect(host, port)
     status_q.put_nowait(gui.ReadConnectionStateChanged.ESTABLISHED)
     while True:
@@ -64,6 +68,7 @@ def load_messages_history(filepath, queue):
 
 
 async def authorize(addr, port, token, status_q, watchdog_q):
+    status_q.put_nowait(gui.SendingConnectionStateChanged.INITIATED)
     reader, writer = await connect(addr, port)
     status_q.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
     await reader.readline()
@@ -74,7 +79,7 @@ async def authorize(addr, port, token, status_q, watchdog_q):
     if json_data:
         print(f"Выполнена авторизация. Пользователь {json_data['nickname']}")
         await watchdog_q.put("Authorization done")
-        return writer, json_data['nickname']
+        return reader, writer, json_data['nickname']
     else:
         messagebox.showinfo("Неверный токен", "Проверьте токен или зарегистрируйте новый")
         raise InvalidToken()
@@ -83,11 +88,53 @@ async def authorize(addr, port, token, status_q, watchdog_q):
 async def watch_for_connection(watch_dog_q):
     while True:
         try:
-            async with timeout(1.5) as cm:
+            async with timeout(5) as cm:
                 message = await watch_dog_q.get()
             logger.debug(f"[{time.time()}] Connection is alive! {message}")
         except asyncio.TimeoutError:
-            logger.debug("1.5s timeout is elapsed")
+            logger.debug("5s timeout is elapsed")
+            raise ConnectionError
+
+
+async def handle_connection(options, messages_queue, status_updates_queue, watchdog_queue, history_queue, sending_queue):
+
+    load_messages_history("chat_history.txt", messages_queue)
+
+    while True:
+        try:
+            async with timeout(5) as cm:
+                reader, writer, nickname = await authorize(options.host,
+                                                   options.write_port,
+                                                   options.token,
+                                                   status_updates_queue,
+                                                   watchdog_queue)
+                event = gui.NicknameReceived(nickname)
+                status_updates_queue.put_nowait(event)
+
+            async with create_handy_nursery() as nursery:
+                nursery.start_soon(read_msgs(options.host, options.port, messages_queue, history_queue, status_updates_queue, watchdog_queue))
+                nursery.start_soon(send_msgs(writer, sending_queue, watchdog_queue))
+                nursery.start_soon(ping_pong(reader, writer, watchdog_queue))
+                nursery.start_soon(watch_for_connection(watchdog_queue))
+        except (ConnectionError, ConnectionResetError, socket.gaierror):
+            print("Connection error!")
+            await asyncio.sleep(30)
+        else:
+            break
+
+
+async def ping_pong(reader, writer, watchdog_q):
+    while True:
+        try:
+            async with timeout(15) as cm:
+                writer.write("\n".encode())
+                await writer.drain()
+                await reader.readline()
+            await watchdog_q.put("Ping message was successful")
+            await asyncio.sleep(10)
+        except socket.gaierror:
+            await watchdog_q.put("Connection lost!")
+            raise ConnectionError
 
 
 async def main():
@@ -108,26 +155,23 @@ async def main():
     history_queue = asyncio.Queue()
     watchdog_queue = asyncio.Queue()
 
-    load_messages_history("chat_history.txt", messages_queue)
-
-    writer, nickname = await authorize(options.host,
-                                       options.write_port,
-                                       options.token,
-                                       status_updates_queue,
-                                       watchdog_queue)
-    event = gui.NicknameReceived(nickname)
-    status_updates_queue.put_nowait(event)
-
     try:
-        await asyncio.gather(
-            read_msgs(options.host, options.port, messages_queue, history_queue, status_updates_queue, watchdog_queue),
-            send_msgs(writer, sending_queue, watchdog_queue),
-            save_messages("chat_history.txt", history_queue),
-            watch_for_connection(watchdog_queue),
-            gui.draw(messages_queue, sending_queue, status_updates_queue)
-\
-        )
+        async with create_handy_nursery() as nursery:
+            nursery.start_soon(gui.draw(messages_queue, sending_queue, status_updates_queue))
+            nursery.start_soon(handle_connection(options,
+                                                 messages_queue,
+                                                 status_updates_queue,
+                                                 watchdog_queue,
+                                                 history_queue,
+                                                 sending_queue)
+                               )
+            nursery.start_soon(save_messages("chat_history.txt", history_queue))
     except (gui.TkAppClosed, InvalidToken):
-        print("Чат закрыт")
+        sys.exit()
 
-asyncio.run(main())
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
+
+
