@@ -6,7 +6,7 @@ import logging
 import sys
 from tkinter import messagebox
 import gui
-from util import create_handy_nursery, set_keepalive_linux
+from util import create_handy_nursery, set_keepalive_linux, set_keepalive_win
 
 
 import aiofiles
@@ -14,6 +14,9 @@ import configargparse
 from dotenv import load_dotenv
 from async_timeout import timeout
 
+PING_PONG_TIMEOUT = 15
+PING_PONG_INTERVAL = 10
+WATCHDOG_UPDATE_INTERVAL = 10
 
 logger = logging.getLogger("watchdog_logger")
 ch = logging.StreamHandler()
@@ -28,11 +31,11 @@ class InvalidToken(Exception):
 async def connect(addr, port):
     sock = socket.create_connection((addr, port))
     # set_keepalive_linux(sock)
+    # set_keepalive_win(sock)
     return await asyncio.open_connection(sock=sock)
 
 
 async def read_msgs(host, port, queue, history_q, status_q, watchdog_q):
-    status_q.put_nowait(gui.ReadConnectionStateChanged.INITIATED)
     reader, writer = await connect(host, port)
     status_q.put_nowait(gui.ReadConnectionStateChanged.ESTABLISHED)
     while True:
@@ -68,7 +71,6 @@ def load_messages_history(filepath, queue):
 
 
 async def authorize(addr, port, token, status_q, watchdog_q):
-    status_q.put_nowait(gui.SendingConnectionStateChanged.INITIATED)
     reader, writer = await connect(addr, port)
     status_q.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
     await reader.readline()
@@ -77,7 +79,6 @@ async def authorize(addr, port, token, status_q, watchdog_q):
     auth_resp = await reader.readline()
     json_data = json.loads(auth_resp.decode())
     if json_data:
-        print(f"Выполнена авторизация. Пользователь {json_data['nickname']}")
         await watchdog_q.put("Authorization done")
         return reader, writer, json_data['nickname']
     else:
@@ -88,11 +89,11 @@ async def authorize(addr, port, token, status_q, watchdog_q):
 async def watch_for_connection(watch_dog_q):
     while True:
         try:
-            async with timeout(5) as cm:
+            async with timeout(WATCHDOG_UPDATE_INTERVAL) as cm:
                 message = await watch_dog_q.get()
             logger.debug(f"[{time.time()}] Connection is alive! {message}")
         except asyncio.TimeoutError:
-            logger.debug("5s timeout is elapsed")
+            logger.debug(f"{WATCHDOG_UPDATE_INTERVAL}s timeout is elapsed")
             raise ConnectionError
 
 
@@ -102,23 +103,29 @@ async def handle_connection(options, messages_queue, status_updates_queue, watch
 
     while True:
         try:
-            async with timeout(5) as cm:
+            status_updates_queue.put_nowait(gui.ReadConnectionStateChanged.INITIATED)
+            status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.INITIATED)
+            async with timeout(WATCHDOG_UPDATE_INTERVAL) as cm:
                 reader, writer, nickname = await authorize(options.host,
                                                    options.write_port,
                                                    options.token,
                                                    status_updates_queue,
                                                    watchdog_queue)
-                event = gui.NicknameReceived(nickname)
-                status_updates_queue.put_nowait(event)
-
+                if nickname:
+                    event = gui.NicknameReceived(nickname)
+                    status_updates_queue.put_nowait(event)
+                    logger.debug(f"Выполнена авторизация. Пользователь {nickname}")
+                status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
             async with create_handy_nursery() as nursery:
                 nursery.start_soon(read_msgs(options.host, options.port, messages_queue, history_queue, status_updates_queue, watchdog_queue))
                 nursery.start_soon(send_msgs(writer, sending_queue, watchdog_queue))
-                nursery.start_soon(ping_pong(reader, writer, watchdog_queue))
                 nursery.start_soon(watch_for_connection(watchdog_queue))
+                nursery.start_soon(ping_pong(reader, writer, watchdog_queue))
         except (ConnectionError, ConnectionResetError, socket.gaierror):
             print("Connection error!")
-            await asyncio.sleep(30)
+            status_updates_queue.put_nowait(gui.ReadConnectionStateChanged.CLOSED)
+            status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.CLOSED)
+            await asyncio.sleep(5)
         else:
             break
 
@@ -126,14 +133,14 @@ async def handle_connection(options, messages_queue, status_updates_queue, watch
 async def ping_pong(reader, writer, watchdog_q):
     while True:
         try:
-            async with timeout(15) as cm:
+            async with timeout(PING_PONG_TIMEOUT) as cm:
                 writer.write("\n".encode())
                 await writer.drain()
                 await reader.readline()
-            await watchdog_q.put("Ping message was successful")
-            await asyncio.sleep(10)
+            watchdog_q.put_nowait("Ping message was successful")
+            await asyncio.sleep(PING_PONG_INTERVAL)
         except socket.gaierror:
-            await watchdog_q.put("Connection lost!")
+            watchdog_q.put_nowait("Connection lost!")
             raise ConnectionError
 
 
