@@ -30,8 +30,6 @@ class InvalidToken(Exception):
 
 async def connect(addr, port):
     sock = socket.create_connection((addr, port))
-    # set_keepalive_linux(sock)
-    # set_keepalive_win(sock)
     return await asyncio.open_connection(sock=sock)
 
 
