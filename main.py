@@ -5,9 +5,9 @@ import socket
 import logging
 import sys
 from tkinter import messagebox
+from contextlib import asynccontextmanager
 import gui
 from util import create_handy_nursery, set_keepalive_linux, set_keepalive_win
-
 
 import aiofiles
 import configargparse
@@ -44,7 +44,15 @@ async def read_msgs(host, port, queue, history_q, status_q, watchdog_q):
         history_q.put_nowait(decoded_msg)
 
 
-async def send_msgs(writer, queue, watchdog_q):
+async def send_msgs(options, queue, watchdog_q, status_updates_queue):
+    reader, writer = await connect(options.host, options.write_port)
+    user_info = await authorize(reader, writer, options.token, watchdog_q)
+    status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
+    if user_info:
+        event = gui.NicknameReceived(user_info["nickname"])
+        status_updates_queue.put_nowait(event)
+        logger.debug(f"Выполнена авторизация. Пользователь {user_info['nickname']}")
+
     while True:
         message = await queue.get()
         writer.write(f"{message}\n\n".encode())
@@ -68,9 +76,9 @@ def load_messages_history(filepath, queue):
         print(f"Не найден файл {filepath}")
 
 
-async def authorize(addr, port, token, status_q, watchdog_q):
-    reader, writer = await connect(addr, port)
-    status_q.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
+async def authorize(reader, writer, token, watchdog_q):
+    # reader, writer = await connect(addr, port)
+    # status_q.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
     await reader.readline()
     writer.write(f"{token}\n".encode())
     await writer.drain()
@@ -78,7 +86,7 @@ async def authorize(addr, port, token, status_q, watchdog_q):
     json_data = json.loads(auth_resp.decode())
     if json_data:
         await watchdog_q.put("Authorization done")
-        return reader, writer, json_data['nickname']
+        return json_data['nickname']
     else:
         messagebox.showinfo("Неверный токен", "Проверьте токен или зарегистрируйте новый")
         raise InvalidToken()
@@ -103,20 +111,14 @@ async def handle_connection(options, messages_queue, status_updates_queue, watch
         try:
             status_updates_queue.put_nowait(gui.ReadConnectionStateChanged.INITIATED)
             status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.INITIATED)
-            async with timeout(WATCHDOG_UPDATE_INTERVAL) as cm:
-                reader, writer, nickname = await authorize(options.host,
-                                                   options.write_port,
-                                                   options.token,
-                                                   status_updates_queue,
-                                                   watchdog_queue)
-                if nickname:
-                    event = gui.NicknameReceived(nickname)
-                    status_updates_queue.put_nowait(event)
-                    logger.debug(f"Выполнена авторизация. Пользователь {nickname}")
-                status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
+
             async with create_handy_nursery() as nursery:
-                nursery.start_soon(read_msgs(options.host, options.port, messages_queue, history_queue, status_updates_queue, watchdog_queue))
-                nursery.start_soon(send_msgs(writer, sending_queue, watchdog_queue))
+                nursery.start_soon(
+                    read_msgs(options.host, options.port, messages_queue, history_queue, status_updates_queue, watchdog_queue)
+                )
+                nursery.start_soon(
+                    send_msgs(options, sending_queue, watchdog_queue, status_updates_queue)
+                )
                 nursery.start_soon(watch_for_connection(watchdog_queue))
                 nursery.start_soon(ping_pong(reader, writer, watchdog_queue))
         except (ConnectionError, ConnectionResetError, socket.gaierror):
