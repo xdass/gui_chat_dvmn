@@ -5,13 +5,16 @@ import socket
 import logging
 import sys
 from tkinter import messagebox
-import gui
-from util import create_handy_nursery
+
 import aiofiles
 import configargparse
 from dotenv import load_dotenv
 from async_timeout import timeout
 import aionursery
+
+import gui
+from util import create_handy_nursery
+
 
 PING_PONG_TIMEOUT = 15
 PING_PONG_INTERVAL = 10
@@ -146,18 +149,19 @@ async def ping_pong(reader, writer, watchdog_q):
             raise ConnectionError
 
 
-async def main():
-    load_dotenv()
+def get_args():
     config = configargparse.ArgParser()
     config.add_argument("--host", help="Chat server host", env_var="HOST")
     config.add_argument("--port", help="Chat server port", env_var="PORT")
     config.add_argument("--write_port", help="Chat server port", env_var="WRITE_PORT")
-    config.add_argument("--username", help="Username in chat", default="New user")
     config.add_argument("--token", help="Chat user token", env_var="TOKEN")
-    config.add_argument("--message", help="Message to sent")
     config.add_argument("--log_file", help="Path to log file", env_var="LOG_FILE")
-    options = config.parse_args()
+    return config.parse_args()
 
+
+async def main():
+    load_dotenv()
+    options = get_args()
     messages_queue = asyncio.Queue()
     sending_queue = asyncio.Queue()
     status_updates_queue = asyncio.Queue()
