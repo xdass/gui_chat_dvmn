@@ -5,14 +5,13 @@ import socket
 import logging
 import sys
 from tkinter import messagebox
-from contextlib import asynccontextmanager
 import gui
-from util import create_handy_nursery, set_keepalive_linux, set_keepalive_win
-
+from util import create_handy_nursery
 import aiofiles
 import configargparse
 from dotenv import load_dotenv
 from async_timeout import timeout
+import aionursery
 
 PING_PONG_TIMEOUT = 15
 PING_PONG_INTERVAL = 10
@@ -44,20 +43,26 @@ async def read_msgs(host, port, queue, history_q, status_q, watchdog_q):
         history_q.put_nowait(decoded_msg)
 
 
-async def send_msgs(options, queue, watchdog_q, status_updates_queue):
-    reader, writer = await connect(options.host, options.write_port)
-    user_info = await authorize(reader, writer, options.token, watchdog_q)
-    status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
-    if user_info:
-        event = gui.NicknameReceived(user_info["nickname"])
-        status_updates_queue.put_nowait(event)
-        logger.debug(f"Выполнена авторизация. Пользователь {user_info['nickname']}")
-
+async def _send(writer, queue, watchdog_q):
     while True:
         message = await queue.get()
         writer.write(f"{message}\n\n".encode())
         await watchdog_q.put("Message sent")
         await writer.drain()
+
+
+async def send_msgs(options, queue, watchdog_q, status_updates_queue):
+    reader, writer = await connect(options.host, options.write_port)
+    user_info = await authorize(reader, writer, options.token, watchdog_q)
+    status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
+    if user_info:
+        event = gui.NicknameReceived(user_info)
+        status_updates_queue.put_nowait(event)
+        logger.debug(f"Выполнена авторизация. Пользователь {user_info}")
+
+    async with create_handy_nursery() as nursery:
+        nursery.start_soon(_send(writer, queue, watchdog_q))
+        nursery.start_soon(ping_pong(reader, writer, watchdog_q))
 
 
 async def save_messages(filepath, queue):
@@ -77,8 +82,6 @@ def load_messages_history(filepath, queue):
 
 
 async def authorize(reader, writer, token, watchdog_q):
-    # reader, writer = await connect(addr, port)
-    # status_q.put_nowait(gui.SendingConnectionStateChanged.ESTABLISHED)
     await reader.readline()
     writer.write(f"{token}\n".encode())
     await writer.drain()
@@ -120,9 +123,8 @@ async def handle_connection(options, messages_queue, status_updates_queue, watch
                     send_msgs(options, sending_queue, watchdog_queue, status_updates_queue)
                 )
                 nursery.start_soon(watch_for_connection(watchdog_queue))
-                nursery.start_soon(ping_pong(reader, writer, watchdog_queue))
-        except (ConnectionError, ConnectionResetError, socket.gaierror):
-            print("Connection error!")
+        except (aionursery.MultiError, ConnectionError, ConnectionResetError, socket.gaierror):
+            logger.debug(">>>>>>>>>Connection error!")
             status_updates_queue.put_nowait(gui.ReadConnectionStateChanged.CLOSED)
             status_updates_queue.put_nowait(gui.SendingConnectionStateChanged.CLOSED)
             await asyncio.sleep(5)
