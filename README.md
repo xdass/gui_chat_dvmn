@@ -1,7 +1,7 @@
 # Графический клиент для чата(minechat)
 Доступно 2-клиента:
  * main.py - полноценный gui-клиент для общения в чате minechat(поддерживает историю сообщений)
- * registration - gui-клиент для регистрации нового пользователя
+ * registration.py - gui-клиент для регистрации нового пользователя
 
 Служебные файлы:
  * util.py - вспомогательные функции
@@ -39,8 +39,8 @@ python main.py
 [1580201361.7558668] Connection is alive! New message in chat
 .......
 ```
-Интерфейс чата
+Интерфейс чата<br>
 <a href="https://ibb.co/XZnKnDy"><img src="https://i.ibb.co/PZ2P2MT/example.png" alt="example" border="0"></a>
 
-Интерфейс регистрации
+Интерфейс регистрации<br>
 <a href="https://imgbb.com/"><img src="https://i.ibb.co/XpNr4Zh/example-reg.png" alt="example-reg" border="0"></a>
