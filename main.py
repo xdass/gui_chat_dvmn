@@ -156,6 +156,7 @@ def get_args():
     config.add_argument("--write_port", help="Chat server port", env_var="WRITE_PORT")
     config.add_argument("--token", help="Chat user token", env_var="TOKEN")
     config.add_argument("--log_file", help="Path to log file", env_var="LOG_FILE")
+    config.add_argument("--history_file", help="Path to file with chat history", env_var="HISTORY_FILE")
     return config.parse_args()
 
 
@@ -178,7 +179,7 @@ async def main():
                                                  history_queue,
                                                  sending_queue)
                                )
-            nursery.start_soon(save_messages("chat_history.txt", history_queue))
+            nursery.start_soon(save_messages(options.history_file, history_queue))
     except (gui.TkAppClosed, InvalidToken):
         sys.exit()
 

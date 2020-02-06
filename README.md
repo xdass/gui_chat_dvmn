@@ -21,6 +21,7 @@ HOST=minechat.dvmn.org<br>
 PORT=5000<br>
 WRITE_PORT=5050<br>
 LOG_FILE=./chat_log.txt<br>
+HISTORY_FILE=./chat_history.txt
 TOKEN=YOUR_TOKEN
 
 ## Как запустить
