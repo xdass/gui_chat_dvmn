@@ -61,10 +61,9 @@ async def draw(sending_queue):
     send_button["command"] = lambda: get_name(input_field, sending_queue)
     send_button.pack(side="left")
 
-    await asyncio.gather(
-        update_tk(root_frame),
-        process(sending_queue)
-    )
+    async with create_handy_nursery() as nursery:
+        nursery.start_soon(update_tk(root_frame))
+        nursery.start_soon(process(sending_queue))
 
 
 async def main():
@@ -72,8 +71,7 @@ async def main():
     name_queue = Queue()
 
     try:
-        async with create_handy_nursery() as nursery:
-            nursery.start_soon(draw(name_queue))
+        await draw(name_queue)
     except TkAppClosed:
         sys.exit()
 
